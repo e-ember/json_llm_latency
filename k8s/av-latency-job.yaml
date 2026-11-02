@@ -1,0 +1,65 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: emrlu-av-latency
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                # Pin one GPU type for every run. List valid values with:
+                #   kubectl get nodes -L nvidia.com/gpu.product
+                values: ["NVIDIA-A100-SXM4-80GB"]
+      containers:
+      - name: av-latency
+        image: pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
+        env:
+        - name: HF_HOME
+          value: /pvcvolume/hf_cache
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef: {name: av-latency-keys, key: HF_TOKEN, optional: true}
+        - name: GROQ_API_KEY
+          valueFrom:
+            secretKeyRef: {name: av-latency-keys, key: GROQ_API_KEY}
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef: {name: av-latency-keys, key: GEMINI_API_KEY}
+        command:
+        - sh
+        - -c
+        - >
+          pip install transformers accelerate openai &&
+          nvidia-smi &&
+          python /code/agent_act.py --require_cuda --runs 10
+          --out /pvcvolume/runs.jsonl --table /pvcvolume/latency_table.md
+          --models
+          hf:Qwen/Qwen2.5-0.5B-Instruct
+          hf:HuggingFaceTB/SmolLM2-1.7B-Instruct
+          hf:microsoft/Phi-3.5-mini-instruct
+          hf:mistralai/Mistral-7B-Instruct-v0.3
+          hf:Qwen/Qwen2.5-14B-Instruct
+          api:groq:openai/gpt-oss-20b
+          api:gemini:gemini-3.8-flash
+        volumeMounts:
+        - name: pvcvolume
+          mountPath: /pvcvolume
+        - name: code
+          mountPath: /code
+        resources:
+          requests: {memory: 32Gi, cpu: "4", nvidia.com/gpu: 1}
+          limits:   {memory: 32Gi, cpu: "4", nvidia.com/gpu: 1}
+      volumes:
+      - name: pvcvolume
+        persistentVolumeClaim:
+          claimName: emrlu-av-latency
+      - name: code
+        configMap:
+          name: av-latency-code
